@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const CITY_CONFIG = {
@@ -29,17 +29,87 @@ const CITY_CONFIG = {
   }
 };
 
+function addDays(date, days) {
+  const out = new Date(date);
+  out.setDate(out.getDate() + days);
+  return out;
+}
+
+function toISODate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getDefaultWindows() {
+  const compareEnd = addDays(new Date(), -7);
+  const compareStart = addDays(compareEnd, -179);
+  const baselineEnd = addDays(compareStart, -1);
+  const baselineStart = addDays(baselineEnd, -179);
+
+  return {
+    baselineStart: toISODate(baselineStart),
+    baselineEnd: toISODate(baselineEnd),
+    compareStart: toISODate(compareStart),
+    compareEnd: toISODate(compareEnd)
+  };
+}
+
+function mean(nums) {
+  if (!nums.length) return 0;
+  return nums.reduce((acc, n) => acc + n, 0) / nums.length;
+}
+
+function std(nums, m) {
+  if (nums.length < 2) return 0;
+  const variance =
+    nums.reduce((acc, n) => acc + (n - m) ** 2, 0) / (nums.length - 1);
+  return Math.sqrt(variance);
+}
+
+function pearson(x, y) {
+  if (x.length !== y.length || x.length < 2) return 0;
+
+  const mx = mean(x);
+  const my = mean(y);
+
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+
+  for (let i = 0; i < x.length; i += 1) {
+    const dx = x[i] - mx;
+    const dy = y[i] - my;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+
+  const den = Math.sqrt(denX * denY);
+  return den === 0 ? 0 : num / den;
+}
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
 function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
+
   res.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8"
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
   });
-  res.end(JSON.stringify(payload));
+
+  res.end(body);
 }
 
 function sendText(res, statusCode, text) {
   res.writeHead(statusCode, {
-    "Content-Type": "text/plain; charset=utf-8"
+    "Content-Type": "text/plain; charset=utf-8",
+    "Access-Control-Allow-Origin": "*"
   });
+
   res.end(text);
 }
 
@@ -49,7 +119,10 @@ function handleCities(_req, res) {
     ...cfg
   }));
 
-  sendJson(res, 200, { cities });
+  sendJson(res, 200, {
+    cities,
+    defaultWindows: getDefaultWindows()
+  });
 }
 
 function serveStatic(reqPath, res) {
@@ -79,6 +152,15 @@ function serveStatic(reqPath, res) {
 
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    });
+    return res.end();
+  }
 
   if (req.method === "GET" && reqUrl.pathname === "/api/cities") {
     return handleCities(req, res);
