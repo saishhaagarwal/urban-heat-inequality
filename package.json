@@ -1,0 +1,21 @@
+{
+  "name": "urban-heat-inequality-india",
+  "version": "1.0.0",
+  "description": "Browser-based project to map urban heat inequality in Indian cities using open weather and OSM data",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "urban-heat",
+    "india",
+    "climate",
+    "gis",
+    "nodejs",
+    "dashboard"
+  ],
+  "author": "",
+  "license": "MIT"
+}
