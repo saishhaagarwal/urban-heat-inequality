@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Urban Heat Inequality Mapper - India</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Climate x Data Science x Urban Equity</p>
+        <h1>Mapping Urban Heat Inequality in Indian Cities</h1>
+        <p class="subhead">
+          Discover which city zones are heating up fastest and understand the drivers behind
+          local heat risk.
+        </p>
+      </section>
+
+      <section class="panel">
+        <label>
+          City
+          <select id="citySelect"></select>
+        </label>
+
+        <label>
+          Backend URL
+          <input id="backendUrlInput" type="text" placeholder="http://localhost:3000" />
+        </label>
+
+        <button id="runBtn">Run Analysis</button>
+        <pre id="statusBox">Ready.</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Heat Inequality Map</h2>
+        <div id="map"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
