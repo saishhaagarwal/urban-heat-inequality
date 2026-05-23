@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Urban Heat Inequality Mapper - India</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -12,29 +18,85 @@
         <p class="eyebrow">Climate x Data Science x Urban Equity</p>
         <h1>Mapping Urban Heat Inequality in Indian Cities</h1>
         <p class="subhead">
-          Discover which city zones are heating up fastest and understand the drivers behind
-          local heat risk.
+          Discover which city zones are heating up fastest and quantify how local conditions shape
+          heat risk.
         </p>
       </section>
 
       <section class="panel">
-        <label>
-          City
-          <select id="citySelect"></select>
-        </label>
+        <div class="controls-grid">
+          <label>
+            City
+            <select id="citySelect"></select>
+          </label>
 
-        <label>
-          Backend URL
-          <input id="backendUrlInput" type="text" placeholder="http://localhost:3000" />
-        </label>
+          <label>
+            Grid Resolution
+            <select id="gridSizeSelect">
+              <option value="3">3 x 3</option>
+              <option value="4" selected>4 x 4</option>
+              <option value="5">5 x 5</option>
+              <option value="6">6 x 6</option>
+            </select>
+          </label>
 
-        <button id="runBtn">Run Analysis</button>
-        <pre id="statusBox">Ready.</pre>
+          <label>
+            OSM Radius (meters)
+            <input id="radiusInput" type="number" min="400" max="1200" step="50" value="700" />
+          </label>
+
+          <label>
+            Backend URL
+            <input id="backendUrlInput" type="text" placeholder="http://localhost:3000" />
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="checkSourcesBtn" class="ghost">Check External Sources</button>
+          <button id="runBtn" class="solid">Run Full Analysis</button>
+        </div>
+
+        <pre id="statusBox" class="status">Ready.</pre>
       </section>
 
-      <section class="panel">
-        <h2>Heat Inequality Map</h2>
-        <div id="map"></div>
+      <section class="layout">
+        <article class="panel map-panel">
+          <h2>Heat Inequality Map</h2>
+          <div id="map"></div>
+          <p class="footnote">Circle color: warming delta. Circle radius: vulnerability index.</p>
+        </article>
+
+        <article class="panel insights-panel">
+          <h2>Feature Influence</h2>
+          <div id="importanceBars" class="bars"></div>
+          <h2 class="mt">Correlation with Heat Delta</h2>
+          <div id="correlationList" class="corr-list"></div>
+        </article>
+      </section>
+
+      <section class="layout">
+        <article class="panel">
+          <h2>Green Share vs Heat Delta</h2>
+          <svg id="scatterPlot" viewBox="0 0 560 320" preserveAspectRatio="none"></svg>
+        </article>
+
+        <article class="panel">
+          <h2>Most Vulnerable Zones</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Zone</th>
+                  <th>Heat Delta (C)</th>
+                  <th>Green Share</th>
+                  <th>Built Density</th>
+                  <th>Vulnerability</th>
+                </tr>
+              </thead>
+              <tbody id="zoneTableBody"></tbody>
+            </table>
+          </div>
+        </article>
       </section>
     </main>
 
