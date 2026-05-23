@@ -10,20 +10,30 @@
       href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    <div class="bg-grid"></div>
+
     <main class="page">
-      <section class="hero">
+      <section class="hero reveal">
         <p class="eyebrow">Climate x Data Science x Urban Equity</p>
         <h1>Mapping Urban Heat Inequality in Indian Cities</h1>
         <p class="subhead">
-          Discover which city zones are heating up fastest and quantify how local conditions shape
-          heat risk.
+          Discover which city zones are heating up fastest and quantify how greenery, built density,
+          and water proximity shape local heat risk.
         </p>
       </section>
 
-      <section class="panel">
+      <section class="panel reveal delay-1">
         <div class="controls-grid">
           <label>
             City
@@ -33,10 +43,10 @@
           <label>
             Grid Resolution
             <select id="gridSizeSelect">
-              <option value="3">3 x 3</option>
-              <option value="4" selected>4 x 4</option>
-              <option value="5">5 x 5</option>
-              <option value="6">6 x 6</option>
+              <option value="3">3 x 3 (fast)</option>
+              <option value="4" selected>4 x 4 (balanced)</option>
+              <option value="5">5 x 5 (detailed)</option>
+              <option value="6">6 x 6 (slow)</option>
             </select>
           </label>
 
@@ -51,6 +61,25 @@
           </label>
         </div>
 
+        <div class="date-grid">
+          <label>
+            Baseline Start
+            <input id="baselineStart" type="date" />
+          </label>
+          <label>
+            Baseline End
+            <input id="baselineEnd" type="date" />
+          </label>
+          <label>
+            Comparison Start
+            <input id="compareStart" type="date" />
+          </label>
+          <label>
+            Comparison End
+            <input id="compareEnd" type="date" />
+          </label>
+        </div>
+
         <div class="button-row">
           <button id="checkSourcesBtn" class="ghost">Check External Sources</button>
           <button id="runBtn" class="solid">Run Full Analysis</button>
@@ -59,7 +88,9 @@
         <pre id="statusBox" class="status">Ready.</pre>
       </section>
 
-      <section class="layout">
+      <section class="stats reveal delay-2" id="statsSection"></section>
+
+      <section class="layout reveal delay-3">
         <article class="panel map-panel">
           <h2>Heat Inequality Map</h2>
           <div id="map"></div>
@@ -74,7 +105,7 @@
         </article>
       </section>
 
-      <section class="layout">
+      <section class="layout reveal delay-4">
         <article class="panel">
           <h2>Green Share vs Heat Delta</h2>
           <svg id="scatterPlot" viewBox="0 0 560 320" preserveAspectRatio="none"></svg>
@@ -100,6 +131,11 @@
       </section>
     </main>
 
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
     <script src="app.js"></script>
   </body>
 </html>
