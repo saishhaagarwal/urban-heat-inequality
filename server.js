@@ -3,6 +3,8 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 
+// Some managed networks intercept TLS and break Node certificate verification.
+// Set ALLOW_INSECURE_TLS=0 to disable this fallback.
 if (process.env.ALLOW_INSECURE_TLS !== "0") {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 }
@@ -41,14 +43,12 @@ const GREEN_LANDUSE = new Set([
   "recreation_ground",
   "orchard"
 ]);
-
 const GREEN_LEISURE = new Set(["park", "garden", "nature_reserve", "golf_course"]);
 const GREEN_NATURAL = new Set(["wood", "scrub", "grassland", "wetland"]);
 
 const BUILT_LANDUSE = new Set(["residential", "industrial", "commercial", "retail"]);
 const WATER_NATURAL = new Set(["water", "wetland"]);
 const WATER_LANDUSE = new Set(["reservoir", "basin"]);
-
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -82,7 +82,6 @@ function getDefaultWindows() {
   const compareStart = addDays(compareEnd, -179);
   const baselineEnd = addDays(compareStart, -1);
   const baselineStart = addDays(baselineEnd, -179);
-
   return {
     baselineStart: toISODate(baselineStart),
     baselineEnd: toISODate(baselineEnd),
@@ -96,18 +95,43 @@ function mean(nums) {
   return nums.reduce((acc, n) => acc + n, 0) / nums.length;
 }
 
+function std(nums, m) {
+  if (nums.length < 2) return 0;
+  const variance = nums.reduce((acc, n) => acc + (n - m) ** 2, 0) / (nums.length - 1);
+  return Math.sqrt(variance);
+}
+
+function pearson(x, y) {
+  if (x.length !== y.length || x.length < 2) return 0;
+  const mx = mean(x);
+  const my = mean(y);
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < x.length; i += 1) {
+    const dx = x[i] - mx;
+    const dy = y[i] - my;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+  const den = Math.sqrt(denX * denY);
+  return den === 0 ? 0 : num / den;
+}
+
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
 function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type"
   });
-  res.end(JSON.stringify(payload));
+  res.end(body);
 }
 
 function sendText(res, statusCode, text) {
@@ -118,28 +142,45 @@ function sendText(res, statusCode, text) {
   res.end(text);
 }
 
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 1_000_000) {
+        reject(new Error("Payload too large"));
+      }
+    });
+    req.on("end", () => {
+      if (!data) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch (error) {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 async function fetchJson(url, options = {}, timeoutMs = 30000, retries = 2) {
   let lastError;
-
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
     try {
-      const response = await fetch(url, {
+      const res = await fetch(url, {
         ...options,
         signal: controller.signal,
         headers: {
-          "User-Agent": "urban-heat-app/1.0",
+          "User-Agent": "urban-heat-inequality-app/1.0",
           ...(options.headers || {})
         }
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} for ${url}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} for ${url}`);
       }
-
-      return await response.json();
+      return await res.json();
     } catch (error) {
       lastError = error;
       if (attempt === retries) break;
@@ -147,7 +188,6 @@ async function fetchJson(url, options = {}, timeoutMs = 30000, retries = 2) {
       clearTimeout(timeout);
     }
   }
-
   throw lastError;
 }
 
@@ -165,7 +205,6 @@ function generateGrid(bbox, gridSize) {
   const latStep = (maxLat - minLat) / gridSize;
   const lonStep = (maxLon - minLon) / gridSize;
   const points = [];
-
   for (let r = 0; r < gridSize; r += 1) {
     for (let c = 0; c < gridSize; c += 1) {
       points.push({
@@ -177,7 +216,6 @@ function generateGrid(bbox, gridSize) {
       });
     }
   }
-
   return points;
 }
 
@@ -190,7 +228,6 @@ async function fetchTemperatureWindow(lat, lon, startDate, endDate) {
     daily: "temperature_2m_mean",
     timezone: "auto"
   });
-
   const url = `https://archive-api.open-meteo.com/v1/archive?${params.toString()}`;
   const data = await fetchJson(url, {}, 35000);
   const values = data?.daily?.temperature_2m_mean || [];
@@ -214,20 +251,11 @@ function classifyOsmElement(el) {
 }
 
 async function fetchOsmProxy(lat, lon, radiusMeters) {
-  const query = `[out:json][timeout:25];
-(
-  nwr(around:${radiusMeters},${lat},${lon})[building];
-  nwr(around:${radiusMeters},${lat},${lon})[landuse];
-  nwr(around:${radiusMeters},${lat},${lon})[leisure];
-  nwr(around:${radiusMeters},${lat},${lon})[natural];
-  nwr(around:${radiusMeters},${lat},${lon})[waterway];
-);
-out tags;`;
+  const query = `[out:json][timeout:25];\n(\n  nwr(around:${radiusMeters},${lat},${lon})[building];\n  nwr(around:${radiusMeters},${lat},${lon})[landuse];\n  nwr(around:${radiusMeters},${lat},${lon})[leisure];\n  nwr(around:${radiusMeters},${lat},${lon})[natural];\n  nwr(around:${radiusMeters},${lat},${lon})[waterway];\n);\nout tags;`;
 
   let data = null;
   let usedEndpoint = null;
   let lastError = null;
-
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
       const body = new URLSearchParams({ data: query });
@@ -294,6 +322,86 @@ async function mapWithConcurrency(items, worker, concurrency = 4) {
   return results;
 }
 
+function normalizeRows(rows, featureKeys) {
+  const stats = {};
+  for (const key of featureKeys) {
+    const vals = rows.map((r) => r[key]);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    stats[key] = { min, max };
+  }
+
+  return rows.map((row) => {
+    const normalized = { ...row };
+    for (const key of featureKeys) {
+      const { min, max } = stats[key];
+      const range = max - min;
+      normalized[`n_${key}`] = range === 0 ? 0.5 : (row[key] - min) / range;
+    }
+    return normalized;
+  });
+}
+
+function fitLinearRegression(rows, featureKeys, targetKey) {
+  const x = rows.map((row) => [1, ...featureKeys.map((k) => row[`n_${k}`])]);
+  const y = rows.map((row) => row[targetKey]);
+
+  let w = new Array(featureKeys.length + 1).fill(0);
+  const learningRate = 0.05;
+  const epochs = 1200;
+
+  for (let epoch = 0; epoch < epochs; epoch += 1) {
+    const grad = new Array(w.length).fill(0);
+    for (let i = 0; i < x.length; i += 1) {
+      const pred = x[i].reduce((acc, xi, j) => acc + xi * w[j], 0);
+      const err = pred - y[i];
+      for (let j = 0; j < w.length; j += 1) {
+        grad[j] += (2 * err * x[i][j]) / x.length;
+      }
+    }
+    for (let j = 0; j < w.length; j += 1) {
+      w[j] -= learningRate * grad[j];
+    }
+  }
+
+  const predictions = x.map((row) => row.reduce((acc, xi, j) => acc + xi * w[j], 0));
+  const mse = mean(predictions.map((p, i) => (p - y[i]) ** 2));
+
+  return { weights: w, mse, predictions };
+}
+
+function permutationImportance(rows, featureKeys, targetKey, model) {
+  const baseline = model.mse;
+  const importances = {};
+
+  for (const feature of featureKeys) {
+    const shuffled = [...rows.map((r) => r[`n_${feature}`])];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const preds = rows.map((row, idx) => {
+      let pred = model.weights[0];
+      featureKeys.forEach((k, kIdx) => {
+        const value = k === feature ? shuffled[idx] : row[`n_${k}`];
+        pred += model.weights[kIdx + 1] * value;
+      });
+      return pred;
+    });
+
+    const mse = mean(preds.map((p, i) => (p - rows[i][targetKey]) ** 2));
+    importances[feature] = Math.max(0, mse - baseline);
+  }
+
+  const total = Object.values(importances).reduce((a, b) => a + b, 0) || 1;
+  const scaled = {};
+  for (const k of Object.keys(importances)) {
+    scaled[k] = (importances[k] / total) * 100;
+  }
+  return scaled;
+}
+
 async function handleCities(_req, res) {
   const cities = Object.entries(CITY_CONFIG).map(([id, cfg]) => ({ id, ...cfg }));
   sendJson(res, 200, { cities, defaultWindows: getDefaultWindows() });
@@ -317,7 +425,14 @@ async function handleSources(_req, res) {
         body
       });
       return `elements: ${Array.isArray(d?.elements) ? d.elements.length : 0}`;
-    })
+    }),
+    nominatim: await probe(
+      "https://nominatim.openstreetmap.org/search?q=Bengaluru&format=json&limit=1",
+      async (url) => {
+        const d = await fetchJson(url);
+        return Array.isArray(d) && d.length ? "geocoding ok" : "no geocoder results";
+      }
+    )
   };
 
   const allOk = Object.values(checks).every((c) => c.ok);
@@ -404,17 +519,42 @@ async function handleAnalyze(req, res) {
     );
 
     const rows = rawRows.filter((r) => Number.isFinite(r.baselineTemp) && Number.isFinite(r.compareTemp));
-
     if (rows.length < 6) {
       return sendJson(res, 502, {
         error: "Insufficient temperature data returned from external API. Try again or reduce grid size."
       });
     }
 
+    const featureKeys = ["greenShare", "builtDensity", "waterShare"];
+    const normalizedRows = normalizeRows(rows, featureKeys);
+
+    const model = fitLinearRegression(normalizedRows, featureKeys, "heatDelta");
+    const importance = permutationImportance(normalizedRows, featureKeys, "heatDelta", model);
+
     const heatValues = rows.map((r) => r.heatDelta);
     const heatMean = mean(heatValues);
+    const heatStd = std(heatValues, heatMean) || 1;
 
-    const ranked = [...rows].sort((a, b) => b.heatDelta - a.heatDelta);
+    const enriched = normalizedRows.map((row, idx) => {
+      const riskRaw =
+        (row.heatDelta - heatMean) / heatStd +
+        0.8 * row.n_builtDensity -
+        0.9 * row.n_greenShare -
+        0.4 * row.n_waterShare;
+      return {
+        ...rows[idx],
+        vulnerabilityIndex: Number((50 + 15 * riskRaw).toFixed(2)),
+        predictedHeatDelta: Number(model.predictions[idx].toFixed(3))
+      };
+    });
+
+    const ranked = [...enriched].sort((a, b) => b.vulnerabilityIndex - a.vulnerabilityIndex);
+
+    const corr = {
+      greenShare: pearson(rows.map((r) => r.greenShare), heatValues),
+      builtDensity: pearson(rows.map((r) => r.builtDensity), heatValues),
+      waterShare: pearson(rows.map((r) => r.waterShare), heatValues)
+    };
 
     sendJson(res, 200, {
       meta: {
@@ -436,36 +576,20 @@ async function handleAnalyze(req, res) {
         avgGreenShare: mean(rows.map((r) => r.greenShare)),
         avgBuiltDensity: mean(rows.map((r) => r.builtDensity))
       },
+      correlations: corr,
+      featureImportance: importance,
+      coefficients: {
+        intercept: model.weights[0],
+        greenShare: model.weights[1],
+        builtDensity: model.weights[2],
+        waterShare: model.weights[3]
+      },
       zones: ranked
     });
   } catch (error) {
     console.error(error);
     sendJson(res, 500, { error: error.message || "Analysis failed" });
   }
-}
-
-function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-
-    req.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > 1_000_000) {
-        reject(new Error("Payload too large"));
-      }
-    });
-
-    req.on("end", () => {
-      if (!data) return resolve({});
-      try {
-        resolve(JSON.parse(data));
-      } catch {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
-
-    req.on("error", reject);
-  });
 }
 
 function serveStatic(reqPath, res) {
@@ -487,7 +611,6 @@ function serveStatic(reqPath, res) {
 
     const ext = path.extname(filePath).toLowerCase();
     const type = MIME_TYPES[ext] || "application/octet-stream";
-
     fs.readFile(filePath, (readErr, data) => {
       if (readErr) return sendText(res, 500, "File read error");
       res.writeHead(200, { "Content-Type": type });
@@ -529,5 +652,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Urban Heat app running at http://localhost:${PORT}`);
+  console.log(`Urban Heat Inequality app running at http://localhost:${PORT}`);
 });
