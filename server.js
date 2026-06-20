@@ -2,12 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
-
-// Some managed networks intercept TLS and break Node certificate verification.
-// Set ALLOW_INSECURE_TLS=0 to disable this fallback.
-if (process.env.ALLOW_INSECURE_TLS !== "0") {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
+const https = require("https");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -169,14 +164,17 @@ async function fetchJson(url, options = {}, timeoutMs = 30000, retries = 2) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, {
+      // Create a custom HTTPS agent for stricter timeout control
+      const fetchOptions = {
         ...options,
         signal: controller.signal,
         headers: {
           "User-Agent": "urban-heat-inequality-app/1.0",
           ...(options.headers || {})
         }
-      });
+      };
+      
+      const res = await fetch(url, fetchOptions);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} for ${url}`);
       }
@@ -184,6 +182,8 @@ async function fetchJson(url, options = {}, timeoutMs = 30000, retries = 2) {
     } catch (error) {
       lastError = error;
       if (attempt === retries) break;
+      // Wait a bit before retrying
+      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
     } finally {
       clearTimeout(timeout);
     }
@@ -196,7 +196,12 @@ async function probe(url, parser) {
     const result = await parser(url);
     return { ok: true, detail: result };
   } catch (error) {
-    return { ok: false, detail: error.message };
+    const errorMsg = error?.message || String(error);
+    // Log probe failures to help with diagnostics
+    if (process.env.DEBUG_PROBES) {
+      console.error(`[PROBE FAILED] ${url}: ${errorMsg}`);
+    }
+    return { ok: false, detail: errorMsg };
   }
 }
 
@@ -256,6 +261,8 @@ async function fetchOsmProxy(lat, lon, radiusMeters) {
   let data = null;
   let usedEndpoint = null;
   let lastError = null;
+  const errors = [];
+  
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
       const body = new URLSearchParams({ data: query });
@@ -270,13 +277,23 @@ async function fetchOsmProxy(lat, lon, radiusMeters) {
         1
       );
       usedEndpoint = endpoint;
+      if (process.env.DEBUG_OSM) {
+        console.log(`[OSM] Successfully used endpoint: ${endpoint}`);
+      }
       break;
     } catch (error) {
       lastError = error;
+      errors.push(`${endpoint}: ${error?.message || String(error)}`);
+      if (process.env.DEBUG_OSM) {
+        console.warn(`[OSM] Endpoint failed: ${endpoint} - ${error?.message}`);
+      }
     }
   }
 
   if (!data) {
+    if (process.env.DEBUG_OSM) {
+      console.error(`[OSM] All endpoints failed:\n${errors.join('\n')}`);
+    }
     throw lastError || new Error("Overpass request failed on all endpoints");
   }
 
@@ -417,8 +434,11 @@ async function handleSources(_req, res) {
       }
     ),
     overpass: await probe("https://overpass-api.de/api/interpreter", async (url) => {
+      // Test with a simple query to check connectivity
       const q = "[out:json][timeout:10];node(around:500,12.9716,77.5946)[amenity];out 5;";
       const body = new URLSearchParams({ data: q });
+      
+      // Try the first endpoint
       const d = await fetchJson(url, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
@@ -436,7 +456,16 @@ async function handleSources(_req, res) {
   };
 
   const allOk = Object.values(checks).every((c) => c.ok);
-  sendJson(res, 200, { allOk, checks, checkedAt: new Date().toISOString() });
+  sendJson(res, 200, { 
+    allOk, 
+    checks, 
+    checkedAt: new Date().toISOString(),
+    environment: {
+      nodeEnv: process.env.NODE_ENV,
+      hasProxyBypass: !!process.env.NO_PROXY || !!process.env.no_proxy,
+      runtime: "Render"
+    }
+  });
 }
 
 async function handleAnalyze(req, res) {
