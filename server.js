@@ -1,8 +1,13 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
-const https = require("https");
+
+// Custom HTTPS agent that skips TLS cert verification for public external APIs.
+// Some hosting providers (e.g. Render) cannot verify the certificate chains of
+// public OSM / Overpass endpoints. No external packages needed — uses Node built-ins.
+const externalApiAgent = new https.Agent({ rejectUnauthorized: false });
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -158,34 +163,67 @@ function readJsonBody(req) {
   });
 }
 
+function makeRequest(url, options = {}, timeoutMs = 30000) {
+  const parsedUrl = new URL(url);
+  const isHttps = parsedUrl.protocol === "https:";
+  const lib = isHttps ? https : http;
+  const method = options.method || "GET";
+  const bodyStr = options.body ? options.body.toString() : null;
+  const headers = {
+    "User-Agent": "urban-heat-inequality-app/1.0",
+    ...(options.headers || {})
+  };
+  if (bodyStr) {
+    headers["Content-Length"] = Buffer.byteLength(bodyStr);
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = lib.request(
+      {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        method,
+        headers,
+        agent: isHttps ? externalApiAgent : undefined,
+        timeout: timeoutMs
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            reject(new Error(`Invalid JSON from ${url}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error(`Request timed out for ${url}`));
+    });
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
 async function fetchJson(url, options = {}, timeoutMs = 30000, retries = 2) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      // Create a custom HTTPS agent for stricter timeout control
-      const fetchOptions = {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "urban-heat-inequality-app/1.0",
-          ...(options.headers || {})
-        }
-      };
-      
-      const res = await fetch(url, fetchOptions);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} for ${url}`);
-      }
-      return await res.json();
+      return await makeRequest(url, options, timeoutMs);
     } catch (error) {
       lastError = error;
       if (attempt === retries) break;
-      // Wait a bit before retrying
-      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-    } finally {
-      clearTimeout(timeout);
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -468,6 +506,70 @@ async function handleSources(_req, res) {
   });
 }
 
+async function handleDebugOsm(_req, res) {
+  const results = [];
+  const q = "[out:json][timeout:10];node(around:500,12.9716,77.5946)[amenity];out 5;";
+  const body = new URLSearchParams({ data: q });
+
+  console.log("[DEBUG-OSM] Starting Overpass endpoint tests...");
+
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const result = {
+      endpoint,
+      status: "untested",
+      duration: 0,
+      httpStatus: null,
+      errorMessage: null,
+      elementCount: null,
+      fullResponse: null
+    };
+
+    const startTime = Date.now();
+    try {
+      console.log(`[DEBUG-OSM] Testing: ${endpoint}`);
+      const res_data = await fetchJson(
+        endpoint,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body
+        },
+        45000,
+        0  // No retries for debug
+      );
+      
+      result.status = "success";
+      result.duration = Date.now() - startTime;
+      result.elementCount = Array.isArray(res_data?.elements) ? res_data.elements.length : 0;
+      result.fullResponse = res_data;
+      console.log(`[DEBUG-OSM] ✓ Success (${result.duration}ms, ${result.elementCount} elements): ${endpoint}`);
+    } catch (error) {
+      result.status = "failed";
+      result.duration = Date.now() - startTime;
+      result.errorMessage = error?.message || String(error);
+      result.errorType = error?.name || "Unknown";
+      console.error(`[DEBUG-OSM] ✗ Failed (${result.duration}ms): ${endpoint} - ${result.errorMessage}`);
+    }
+
+    results.push(result);
+  }
+
+  const allFailed = results.every(r => r.status !== "success");
+  console.log(`[DEBUG-OSM] Summary: ${results.filter(r => r.status === "success").length}/${results.length} endpoints working`);
+
+  sendJson(res, 200, {
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    overpassTests: results,
+    summary: {
+      totalEndpoints: results.length,
+      successCount: results.filter(r => r.status === "success").length,
+      failureCount: results.filter(r => r.status === "failed").length,
+      allFailed
+    }
+  });
+}
+
 async function handleAnalyze(req, res) {
   let body;
   try {
@@ -668,6 +770,10 @@ const server = http.createServer(async (req, res) => {
     return handleSources(req, res);
   }
 
+  if (req.method === "GET" && reqUrl.pathname === "/api/debug-osm") {
+    return handleDebugOsm(req, res);
+  }
+
   if (req.method === "POST" && reqUrl.pathname === "/api/analyze") {
     return handleAnalyze(req, res);
   }
@@ -681,5 +787,30 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Urban Heat Inequality app running at http://localhost:${PORT}`);
+  console.log(`
+
+Port:              ${PORT}
+Environment:       ${process.env.NODE_ENV || 'development'}
+Node Version:      ${process.version}
+Platform:          ${process.platform}
+Uptime:            ${process.uptime().toFixed(2)}s
+
+Available Endpoints:
+  - GET  /api/cities          → List available cities
+  - GET  /api/sources         → Health check (Main, Open-Meteo, Overpass, Nominatim)
+  - GET  /api/debug-osm       → Debug Overpass endpoints in detail
+  - POST /api/analyze         → Run full analysis
+  - GET  /                    → Web interface
+
+Debugging Tips:
+  - Check Overpass mirrors: https://urban-heat-inequality.onrender.com/api/debug-osm
+  - View server logs with NODE_ENV=production in Render dashboard
+  - Enable detailed logging: DEBUG_OSM=true DEBUG_PROBES=true
+
+Network Configuration:
+  - NO_PROXY: ${process.env.NO_PROXY || 'not set'}
+  - http_proxy: ${process.env.http_proxy || 'not set'}
+  - https_proxy: ${process.env.https_proxy || 'not set'}
+
+`);
 });
