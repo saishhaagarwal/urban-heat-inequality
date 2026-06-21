@@ -1,3 +1,7 @@
+
+
+
+
 let map;
 let layerGroup;
 
@@ -179,7 +183,7 @@ function renderScatter(zones) {
   axis.innerHTML = `
     <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#456d69" stroke-width="1" />
     <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#456d69" stroke-width="1" />
-    <text x="${width / 2}" y="${height - 10}" fill="#9fc3b8" font-size="12" text-anchor="middle">Green Share (OSM Proxy)</text>
+    <text x="${width / 2}" y="${height - 10}" fill="#9fc3b8" font-size="12" text-anchor="middle">Green Share (ESA WorldCover)</text>
     <text x="14" y="${height / 2}" fill="#9fc3b8" font-size="12" text-anchor="middle" transform="rotate(-90,14,${height / 2})">Heat Delta (C)</text>
   `;
   svg.appendChild(axis);
@@ -253,7 +257,7 @@ async function checkSources() {
     `All sources OK: ${data.allOk}`,
     "",
     `Open-Meteo: ${data.checks.openMeteo.ok} (${data.checks.openMeteo.detail})`,
-    `Overpass OSM: ${data.checks.overpass.ok} (${data.checks.overpass.detail})`,
+    `ESA WorldCover: ${data.checks.worldCover.ok} (${data.checks.worldCover.detail})`,
     `Nominatim: ${data.checks.nominatim.ok} (${data.checks.nominatim.detail})`
   ];
 
@@ -271,7 +275,7 @@ async function runAnalysis() {
     compareEnd: els.compareEnd.value
   };
 
-  setStatus("Running analysis. Fetching temperature + OSM feature proxies for all zones...");
+  setStatus("Running analysis. Fetching temperature + ESA WorldCover land-cover features for all zones...");
   els.runBtn.disabled = true;
 
   try {
